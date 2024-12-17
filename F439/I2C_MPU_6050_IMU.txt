@@ -1,0 +1,348 @@
+// USE THE Drivers of STM32F407 as the registers are nearly same in the F4 series.
+
+#include "All_headers.h"
+
+#define MPU6050_ADDR 0x68
+
+#define SMPLRT_DIV_REG 0x19
+#define GYRO_CONFIG_REG 0x1B
+#define ACCEL_CONFIG_REG 0x1C
+#define ACCEL_XOUT_H_REG 0x3B
+#define TEMP_OUT_H_REG 0x41
+#define GYRO_XOUT_H_REG 0x43
+#define PWR_MGMT_1_REG 0x6B
+#define WHO_AM_I_REG 0x75
+
+void MPU6050_Init(void)
+{
+    uint8_t check;
+    uint8_t Data;
+
+    // Check device ID WHO_AM_I
+    I2C_Receive_t(I2C1, MPU6050_ADDR, WHO_AM_I_REG, 1, &check);  // Read WHO_AM_I (0x75) register
+
+    if (check == 0x68)  // 0x68 indicates MPU6050 is detected
+    {
+        // Power management register 0x6B: Write 0 to wake the sensor up
+        Data = 0x00;
+        I2C_Transmit_t(I2C1, MPU6050_ADDR, PWR_MGMT_1_REG, 1, &Data);
+
+        // Set data rate to 1KHz by writing to SMPLRT_DIV register (0x19)
+        Data = 0x07;
+        I2C_Transmit_t(I2C1, MPU6050_ADDR, SMPLRT_DIV_REG, 1, &Data);
+
+        // Set gyroscope configuration in GYRO_CONFIG Register (0x1B)
+        Data = 0x00;  // ± 250°/s
+        I2C_Transmit_t(I2C1, MPU6050_ADDR, GYRO_CONFIG_REG, 1, &Data);
+
+        // Set accelerometer configuration in ACCEL_CONFIG Register (0x1C)
+        Data = 0x00;  // ± 2g
+        I2C_Transmit_t(I2C1, MPU6050_ADDR, ACCEL_CONFIG_REG, 1, &Data);
+    }
+}
+
+void I2C_Initialize(void){
+    uint32_t i2c_speed = 100000;         // I2C speed set to 100 kHz (standard mode)
+    uint8_t i2c_mode = I2C_MODE_MASTER;  // Set as master mode
+	  I2C_Init(I2C1, i2c_mode, i2c_speed, MPU6050_ADDR);
+}
+
+int16_t Accel_X_RAW = 0;
+int16_t Accel_Y_RAW = 0;
+int16_t Accel_Z_RAW = 0;
+
+int16_t Gyro_X_RAW = 0;
+int16_t Gyro_Y_RAW = 0;
+int16_t Gyro_Z_RAW = 0;
+
+float Ax, Ay, Az, Gx, Gy, Gz;
+
+uint8_t Rec_Data[6];  // Buffer to store the received data
+ 
+void MPU6050_Read_Gyro(void)
+{
+    uint8_t Rec_Data[6];
+
+	// Read 6 bytes of data starting from GYRO_XOUT_H register (0x43)
+    I2C_Receive_t(I2C1, MPU6050_ADDR, GYRO_XOUT_H_REG, 6, Rec_Data);  // Custom I2C receive function with register address
+
+    // Parse the received data
+    Gyro_X_RAW = (int16_t)(Rec_Data[0] << 8 | Rec_Data[1]);
+    Gyro_Y_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data[3]);
+    Gyro_Z_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data[5]);
+
+    // Convert the raw values into degrees per second (dps)
+    Gx = (float)Gyro_X_RAW / 131.0;
+    Gy = (float)Gyro_Y_RAW / 131.0;
+    Gz = (float)Gyro_Z_RAW / 131.0;
+}
+
+void MPU6050_Read_Accel(void)
+{
+    // Read 6 bytes starting from the ACCEL_XOUT_H register (0x3B)
+    I2C_Receive_t(I2C1, MPU6050_ADDR, ACCEL_XOUT_H_REG, 6, Rec_Data);
+
+    // Convert the received data into raw acceleration values
+    Accel_X_RAW = (int16_t)(Rec_Data[0] << 8 | Rec_Data[1]);
+    Accel_Y_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data[3]);
+    Accel_Z_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data[5]);
+
+    // Convert the raw values into acceleration in 'g'
+    // FS_SEL = 0 is configured, so we divide by 16384.0
+    Ax = (float)Accel_X_RAW*100/16384.0;
+	  Ay = (float)Accel_Y_RAW*100/16384.0;
+	  Az = (float)Accel_Z_RAW*100/16384.0;
+}
+
+// Macros to set the Accelerometer sensitivity based on the scale
+#define ACC_2G 16384.0f  // ±2g scale
+#define ACC_4G 8192.0f   // ±4g scale
+#define ACC_8G 4096.0f   // ±8g scale
+#define ACC_16G 2048.0f  // ±16g scale
+
+// Macros to set the Gyroscope sensitivity based on the scale
+#define GYRO_250DPS 131.0f   // ±250 dps scale
+#define GYRO_500DPS 65.5f    // ±500 dps scale
+#define GYRO_1000DPS 32.8f   // ±1000 dps scale
+#define GYRO_2000DPS 16.4f   // ±2000 dps scale
+
+#define ACCEL_SCALE ACC_2G
+#define GYRO_SCALE GYRO_250DPS
+
+void print_sensor_values(void) 
+{
+    char buffer[200];  // Buffer to hold the formatted string
+    
+     // Convert raw values to physical units
+    float Ax_converted = Ax / ACCEL_SCALE;
+    float Ay_converted = Ay / ACCEL_SCALE;
+    float Az_converted = Az / ACCEL_SCALE;
+
+    float Gx_converted = Gx / GYRO_SCALE;
+    float Gy_converted = Gy / GYRO_SCALE;
+    float Gz_converted = Gz / GYRO_SCALE;
+
+    // Format the string with the converted values
+    sprintf(buffer, 
+            "\n\033[31mAccelerometer (g):\033[0m\r\n"
+            "Ax = %.4f g   Ay = %.4f g   Az = %.4f g\r\n"
+            "\033[32mGyroscope (dps):\033[0m\r\n"
+            "Gx = %.4f dps   Gy = %.4f dps   Gz = %.4f dps\r\n", 
+            Ax_converted, Ay_converted, Az_converted, 
+            Gx_converted, Gy_converted, Gz_converted);
+
+    // Send the formatted string over UART
+    uart_send_string(USART3, buffer);
+}
+
+#include <math.h>  // For atan2 and sqrt
+
+#define RAD_TO_DEG 57.2957795131  // Conversion factor from radians to degrees
+
+void calculate_roll_pitch(void) {
+    // Assuming Ax, Ay, Az are in g (converted values from the raw sensor readings)
+
+    // Calculate roll (phi)
+    float roll = atan2(Ay, Az);  // atan2 returns the angle in radians
+
+    // Calculate pitch (theta)
+    float pitch = atan2(-Ax, sqrt(Ay * Ay + Az * Az));
+
+    // Convert from radians to degrees
+    roll *= RAD_TO_DEG;
+    pitch *= RAD_TO_DEG;
+
+    // Print results
+    char buffer[128];
+    sprintf(buffer, "\033[36mRoll\033[0m = %.2f degrees, \033[36mPitch\033[0m = %.2f degrees\r\n", roll, pitch);
+    uart_send_string(USART3, buffer);
+}
+
+int main(void) 
+{
+	  set_sysclk_to_hsi();
+  	I2C_Initialize();
+	  uart_init(USART3, GPIOD, 8, 9, 7, 115200, HSI);	
+    MPU6050_Init();
+    while (1) 
+		{
+			MPU6050_Read_Accel();
+	    MPU6050_Read_Gyro();	
+		 	print_sensor_values();	
+      calculate_roll_pitch();			
+			for(int i = 0; i < 1000000; i++);
+    }
+    return 0;
+}
+
+// _____________________________________________________
+
+
+void I2C_Init(I2C_TypeDef *I2Cx, uint8_t mode, uint32_t speed, uint8_t slave_addr) 
+{
+    // Enable the respective I2C and GPIO clocks
+    if (I2Cx == I2C1) {
+        RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;       // Enable I2C1 clock
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;      // Enable GPIOB clock for SCL and SDA
+
+        // Configure PB8 (SCL) and PB9 (SDA) as Alternate Function (AF4 for I2C1)
+        GPIOB->MODER &= ~(3U << (8 * 2) | 3U << (9 * 2));  // Clear existing mode
+        GPIOB->MODER |= (2 << (8 * 2)) | (2 << (9 * 2));    // Set to Alternate function for PB8 and PB9
+        GPIOB->OTYPER |= (1 << 8) | (1 << 9);               // Set open-drain for both SCL and SDA
+        GPIOB->AFR[1] |= (4 << ((8 - 8) * 4)) | (4 << ((9 - 8) * 4)); // Set AF4 for PB8 (SCL) and PB9 (SDA)
+    }
+    // Add cases for I2C2 and I2C3 if needed, following similar pattern
+
+    // Reset I2C peripheral (if needed)
+    I2Cx->CR1 |= I2C_CR1_SWRST;  // Software reset
+    I2Cx->CR1 &= ~I2C_CR1_SWRST; // Clear reset bit
+
+    // Set peripheral clock frequency (assuming system clock is 84 MHz)
+    uint32_t pclk1 = 16000000;  // Example for STM32F4 series (adjust as needed)
+    I2Cx->CR2 = (pclk1 / 1000000U); // Peripheral clock frequency in MHz (for 84 MHz system clock, this would be 84)
+
+    // Configure speed settings based on desired frequency
+    if (speed <= 100000) {
+        // Standard mode (100 kHz)
+        I2Cx->CCR = (pclk1 / (2 * speed)); // CCR formula for standard mode
+        I2Cx->TRISE = 11;                  // Maximum rise time for 100 kHz
+    } else if (speed <= 400000) {
+        // Fast mode (400 kHz)
+        I2Cx->CCR = (pclk1 / (3 * speed)); // CCR formula for fast mode
+        I2Cx->TRISE = 3;                   // Maximum rise time for 400 kHz
+    } else {
+        // High-speed mode (3.4 MHz or higher) – Optional, depends on your system needs
+        // Add your high-speed mode configuration if necessary
+    }
+
+    // Configure the I2C mode (Master/Slave)
+    if (mode == I2C_MODE_MASTER) {
+        I2Cx->OAR1 = 0; // Own address not used in master mode
+    } else {
+        I2Cx->OAR1 = (slave_addr << 1) | (1 << 14); // Set own address for slave mode
+    }
+
+    // Enable the I2C peripheral
+    I2Cx->CR1 |= I2C_CR1_PE;
+}
+
+#include <stdio.h>
+
+#define I2C_TIMEOUT 1000 // Define a timeout value (in iterations)
+
+static int wait_for_flag(volatile uint32_t *reg, uint32_t flag) {
+    for (int i = 0; i < I2C_TIMEOUT; i++) {
+        if (*reg & flag) {
+            return 1; // Flag is set
+        }
+    }
+    return 0; // Timeout
+}
+
+int I2C_Transmit_t(I2C_TypeDef *I2Cx, uint8_t slave_addr, uint8_t register_addr, uint8_t number_of_bytes, uint8_t *bytes_to_send) 
+{
+    // 1) Send start condition
+    I2Cx->CR1 |= I2C_CR1_START;
+    if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_SB)) {
+        uart_send_string(USART3, "I2C: Start condition failed\r\n");
+        return -1; // Timeout or failure
+    }
+
+    // 2) Send slave address in write mode
+    I2Cx->DR = (slave_addr << 1); // Slave address + write bit (LSB = 0)
+    if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_ADDR)) {
+        uart_send_string(USART3, "I2C: Address ACK failure\r\n");
+        return -1; // Timeout or failure
+    }
+    (void)I2Cx->SR2; // Clear ADDR flag by reading SR2
+
+    // 3) Send the register address to write into
+    I2Cx->DR = register_addr; // Register address
+    if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_BTF)) {
+        uart_send_string(USART3, "I2C: Register address ACK failure\r\n");
+        return -1; // Timeout or failure
+    }
+
+    // 4) Transmit data bytes
+    for (int i = 0; i < number_of_bytes; i++) {
+        I2Cx->DR = bytes_to_send[i]; // Write data to DR
+        if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_BTF)) {
+            uart_send_string(USART3, "I2C: Data ACK failure at byte ");
+            char buffer[10];
+            sprintf(buffer, "%d", i);  // Convert i to string
+            uart_send_string(USART3, buffer);
+            uart_send_string(USART3, "\r\n");
+            return -1; // Timeout or failure
+        }
+    }
+
+    // 5) Send stop condition
+    I2Cx->CR1 |= I2C_CR1_STOP;
+    return 0; // Success
+}
+
+int I2C_Receive_t(I2C_TypeDef *I2Cx, uint8_t slave_addr, uint8_t register_addr, uint8_t number_of_bytes, uint8_t *bytes_received)
+{
+    // 1) Send start condition
+    I2Cx->CR1 |= I2C_CR1_START;
+    if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_SB)) {
+        uart_send_string(USART3, "Start condition failed\r\n");
+        return -1; // Timeout or failure
+    }
+
+    // 2) Send slave address with write mode to send the register address
+    I2Cx->DR = (slave_addr << 1); // Slave address + write bit (0)
+    if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_ADDR)) {
+        uart_send_string(USART3, "Address ACK failure\r\n");
+        return -1; // Timeout or failure
+    }
+    (void)I2Cx->SR2; // Clear ADDR flag
+
+    // 3) Send the register address
+    I2Cx->DR = register_addr;
+    if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_BTF)) {
+        uart_send_string(USART3, "Byte transmission failed\r\n");
+        return -1; // Timeout or failure
+    }
+
+    // 4) Repeated Start for read operation
+    I2Cx->CR1 |= I2C_CR1_START;
+    if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_SB)) {
+        uart_send_string(USART3, "Start condition failed\r\n");
+        return -1; // Timeout or failure
+    }
+
+    // 5) Send slave address with read mode (set the read bit)
+    I2Cx->DR = (slave_addr << 1) | 0x01; // Slave address + read bit
+    if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_ADDR)) {
+        uart_send_string(USART3, "Address ACK failure\r\n");
+        return -1; // Timeout or failure
+    }
+    (void)I2Cx->SR2; // Clear ADDR flag
+
+    // 6) Receive data bytes
+    for (int i = 0; i < number_of_bytes; i++) {
+        if (i == (number_of_bytes - 1)) {
+            // Last byte: Disable ACK, generate STOP condition
+            I2Cx->CR1 &= ~I2C_CR1_ACK; // Disable ACK
+            I2Cx->CR1 |= I2C_CR1_STOP; // Generate STOP condition
+        }
+
+        // Wait until data is received
+        if (!wait_for_flag(&I2Cx->SR1, I2C_SR1_RXNE)) {
+            uart_send_string(USART3, "Data ACK failure at byte ");
+            uart_send_string(USART3, (const char *)i);  // Convert i to string if needed
+            uart_send_string(USART3, "\r\n");
+            return -1; // Timeout or failure
+        }
+
+        bytes_received[i] = I2Cx->DR; // Read received byte from DR
+    }
+
+    // 7) Re-enable ACK for next communications (if needed)
+    I2Cx->CR1 |= I2C_CR1_ACK;
+
+    return 0; // Success
+}
+
+

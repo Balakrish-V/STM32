@@ -1,0 +1,274 @@
+MAIN.c
+
+#include "All_headers.h"
+
+char received_str[10];
+
+volatile uint16_t str_index = 0;  // To keep track of the received string index
+
+// UART interrupt handler
+void USART3_IRQHandler(void)
+{
+    // Check if RXNE (Receive Not Empty) flag is set
+    if (USART3->SR & USART_SR_RXNE)
+    {
+        char c = USART3->DR;  // Read received character from the data register
+        
+        // Break on newline or carriage return (end of input)
+        if (c == '\n' || c == '\r')
+        {
+            received_str[str_index] = '\0';  // Null-terminate the string
+            str_index = 0;  // Reset the index for next string
+        }
+        else
+        {
+            // Check for buffer overflow
+            if (str_index < sizeof(received_str) - 1)
+            {
+                received_str[str_index++] = c;  // Store the received character in the buffer
+            }
+            else
+            {
+                received_str[str_index] = '\0';  // Null-terminate the string in case of overflow
+                str_index = 0;  // Reset the index for next string
+            }
+        }
+    }
+}
+
+int main(void)
+{
+    set_sysclk_to_hsi();              // Set the system clock to HSI
+    LED_Init_f439();                  // Initialize the LED
+    Timer2_Init_Basic();              // Initialize Timer 2
+    SysTick_Init();                   // Initialize SysTick
+
+    // Initialize USART3 with GPIOD, TX on pin 8, RX on pin 9, AF7, 115200 baud rate - header for IT/ Blocking
+    uart_init(USART3, GPIOD, 8, 9, 7, 115200, HSI);
+
+    // Send initial message via USART3
+    uart_send_string(USART3, "\nHello World!\r\n");
+
+    while (1)
+    {
+        // Check if any data has been received
+        if (str_index > 0)  // Data received
+        {
+            // Toggle the LED to indicate data reception
+            LED_Toggle_f439(0);
+            // Process the received string (for example, print it or use it)
+            uart_send_string(USART3, "\nReceived: ");
+            uart_send_string(USART3, received_str);
+            uart_send_string(USART3, "\r\n");
+					  memset(received_str, 0, sizeof(received_str));
+            // Reset str_index to start receiving the next string
+            str_index = 0;
+        }
+        // Delay for 100 ms (you can replace this with a non-blocking method if needed)
+        delay_ms(100);
+    }
+}
+
+
+//____________________________________________
+
+#ifndef UART_GENERIC_H
+#define UART_GENERIC_H
+
+#include "stm32f4xx.h" // Adjust the header file based on your STM32 series
+
+// Define the macro for selecting blocking or interrupt method
+#define UART_MODE_BLOCKING 0
+#define UART_MODE_INTERRUPT 1
+
+// Change this to select between blocking or interrupt mode
+#define UART_MODE UART_MODE_INTERRUPT
+
+// Enum for clock source options
+typedef enum {
+    HSI = 16, // HSI clock speed in MHz (16 MHz)
+    HSE = 8,  // HSE clock speed in MHz (8 MHz)
+    PLL = 0   // PLL speed will be user-defined
+} ClockSource;
+
+// Function Prototypes
+
+/**
+ * @brief Initialize UART with specified parameters.
+ * @param UARTx: Pointer to the USART peripheral (e.g., USART1, USART2).
+ * @param GPIOx: Pointer to the GPIO port (e.g., GPIOA, GPIOB).
+ * @param tx_pin: GPIO pin number for TX.
+ * @param rx_pin: GPIO pin number for RX.
+ * @param af: Alternate function number for the pins.
+ * @param baudrate: Desired baud rate (e.g., 9600, 115200).
+ * @param clock_source: Clock source for the UART (HSI, HSE, PLL).
+ */
+void uart_init(USART_TypeDef *UARTx, GPIO_TypeDef *GPIOx, uint16_t tx_pin, uint16_t rx_pin, uint8_t af, uint32_t baudrate, ClockSource clock_source);
+
+/**
+ * @brief Receive a single character via UART.
+ * @param UARTx: Pointer to the USART peripheral (e.g., USART1, USART2).
+ * @return Received character.
+ */
+char uart_receive_char(USART_TypeDef *UARTx);
+
+/**
+ * @brief Send a single character via UART.
+ * @param UARTx: Pointer to the USART peripheral (e.g., USART1, USART2).
+ * @param c: Character to send.
+ */
+void uart_send_char(USART_TypeDef *UARTx, uint8_t c);
+
+/**
+ * @brief Send a null-terminated string via UART.
+ * @param UARTx: Pointer to the USART peripheral (e.g., USART1, USART2).
+ * @param str: Pointer to the null-terminated string to send.
+ */
+void uart_send_string(USART_TypeDef *UARTx, const char *str);
+
+/**
+ * @brief Receive a string via UART with a specified maximum length.
+ * @param UARTx: Pointer to the USART peripheral (e.g., USART1, USART2).
+ * @param buffer: Pointer to the buffer where the received string will be stored.
+ * @param max_length: Maximum length of the string to receive, including the null terminator.
+ */
+void uart_receive_string(USART_TypeDef *UARTx, char *buffer, uint16_t max_length);
+
+#endif 
+
+
+_______________________________________________
+
+#include "All_headers.h"
+
+// Generic UART Initialization Function
+void uart_init(USART_TypeDef *UARTx, GPIO_TypeDef *GPIOx, uint16_t tx_pin, uint16_t rx_pin, uint8_t af, uint32_t baudrate, ClockSource clock_source)
+{
+    uint32_t clk_speed = 0;
+
+    // Get actual system clock speed based on clock source
+    if (clock_source == HSI) {
+        clk_speed = 16000000;  // HSI is 16 MHz
+    } else if (clock_source == HSE) {
+        clk_speed = 8000000;   // HSE is 8 MHz
+    } else if(clock_source == PLL) {
+        clk_speed = SystemCoreClock;  // Use the system clock speed for PLL
+    }
+
+    // Enable UART Clock
+    if (UARTx == USART1) 
+        RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
+    else if (UARTx == USART2) 
+        RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
+    else if (UARTx == USART3) 
+        RCC->APB1ENR |= RCC_APB1ENR_USART3EN;
+
+    // Enable GPIO Clock
+    if (GPIOx == GPIOA) 
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    else if (GPIOx == GPIOB) 
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+    else if (GPIOx == GPIOC) 
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
+    else if (GPIOx == GPIOD) 
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIODEN;
+    else if (GPIOx == GPIOE) 
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
+
+    // Set GPIO pins to alternate mode
+    GPIOx->MODER &= ~((0x3 << (tx_pin * 2)) | (0x3 << (rx_pin * 2))); // Reset pin modes
+    GPIOx->MODER |= ((0x2 << (tx_pin * 2)) | (0x2 << (rx_pin * 2))); // Alternate function mode
+
+    // Set GPIO pins to high speed
+    GPIOx->OSPEEDR |= ((0x3 << (tx_pin * 2)) | (0x3 << (rx_pin * 2))); // High speed mode
+
+    // Set alternate function for pins
+    if (tx_pin < 8) 
+        GPIOx->AFR[0] |= (af << (tx_pin * 4));
+    else 
+        GPIOx->AFR[1] |= (af << ((tx_pin - 8) * 4));
+
+    if (rx_pin < 8) 
+        GPIOx->AFR[0] |= (af << (rx_pin * 4));
+    else 
+        GPIOx->AFR[1] |= (af << ((rx_pin - 8) * 4));
+
+    // Configure UART
+    UARTx->CR1 &= ~USART_CR1_UE; // Disable UART
+
+    // Set baud rate
+    uint32_t usartdiv = clk_speed / (16 * baudrate);
+    UARTx->BRR = (usartdiv << 4) | ((clk_speed / baudrate) - (usartdiv * 16));
+
+    UARTx->CR1 |= USART_CR1_TE | USART_CR1_RE; // Enable TX and RX
+		 // Enable RXNE interrupt for UART
+    UARTx->CR1 |= USART_CR1_RXNEIE; // Enable the RXNE interrupt (data received)
+
+    UARTx->CR1 |= USART_CR1_UE; // Enable UART
+
+    // Enable USART interrupt in NVIC
+    if (UARTx == USART1) {
+        NVIC_EnableIRQ(USART1_IRQn);
+    } else if (UARTx == USART2) {
+        NVIC_EnableIRQ(USART2_IRQn);
+    } else if (UARTx == USART3) {
+        NVIC_EnableIRQ(USART3_IRQn);
+    }
+		
+    UARTx->CR1 |= USART_CR1_UE;                // Enable UART
+}
+
+// Function to Receive a Character from UART
+char uart_receive_char(USART_TypeDef *UARTx)
+{
+    while (!(UARTx->SR & USART_SR_RXNE)); // Wait for RXNE (Received Data Ready)
+    return (char)(UARTx->DR & 0xFF);     // Read and return the received character
+}
+
+// Function to Send a Character via UART
+void uart_send_char(USART_TypeDef *UARTx, uint8_t c)
+{
+    while (!(UARTx->SR & USART_SR_TXE)); // Wait for TXE (Transmit Data Register Empty)
+    UARTx->DR = c;                      // Send the character
+}
+
+// Function to Send a String
+void uart_send_string(USART_TypeDef *UARTx, const char *str)
+{
+    while (*str != '\0')
+    {
+        uart_send_char(UARTx, *str);
+        str++;
+    }
+}
+
+void uart_receive_string(USART_TypeDef *UARTx, char *buffer, uint16_t max_length)
+{
+    uint16_t i = 0;
+    while (1)
+    {
+        char c = uart_receive_char(UARTx); // Receive a character via UART
+        // Break on newline or carriage return
+        if (c == '\n' || c == '\r')
+        {
+            break;
+        }
+        // Check for buffer overflow
+        if (i >= max_length - 1)
+        {
+            // Optionally handle overflow, e.g., log an error or truncate input
+            buffer[i] = '\0'; // Null-terminate the string
+            return;           // Exit the function
+        }
+        // Store the received character in the buffer
+        buffer[i++] = c;
+    }
+    // Null-terminate the received string
+    buffer[i] = '\0';
+    // Clear the buffer after processing (if required)
+    memset(buffer, 0, max_length); // Clear the buffer by setting all bytes to 0
+}
+
+
+
+
